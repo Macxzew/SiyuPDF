@@ -22,11 +22,9 @@
 
 ---
 
-<center>
-<h2>👁️ Preview</h2>
-</center>
+<h2 align="center">👁️ Preview</h2>
 
-<center><img alt="Preview" src="src/preview.png" width="400"/></center>
+<p align="center"><img alt="Preview" src="src/preview.png" width="400"/></p>
 
 ---
 
