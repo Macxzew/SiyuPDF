@@ -20,10 +20,12 @@ from PIL import Image, ImageDraw, ImageFont
 from reportlab.lib.pagesizes import letter
 from siyupdf.utils import animated_status
 from PyPDF2 import PdfReader, PdfWriter
+from siyupdf.config import FONT_PATH
 from reportlab.pdfgen import canvas
 from colorama import Fore, Style
 from asn1crypto import cms, x509
 from tkinter import filedialog
+from PIL import ImageFont
 from io import BytesIO
 
 
@@ -55,43 +57,78 @@ def add_watermark():
     """
     print(f"{Fore.YELLOW}Étape 2 : Ajout d'un filigrane {Style.RESET_ALL}")
     response = input(f"{Fore.MAGENTA}- Voulez-vous créer un filigrane ? (y/N): {Style.RESET_ALL}").strip().lower()
-    if response.startswith('y'):
-        watermark_text = input(f"{Fore.MAGENTA}- Entrez un texte pour le filigrane (défaut = 'Watermarked') : {Style.RESET_ALL}").strip()
-        watermark_text = watermark_text if watermark_text else "Watermarked"
+    if not response.startswith("y"):
+        print(f"{Fore.LIGHTBLACK_EX}Création de filigrane (SKIP).")
+        return
 
-        # Créer l'image du filigrane
-        width, height = 500, 500
-        image = Image.new("RGBA", (width, height), (255, 255, 255, 0))
-        draw = ImageDraw.Draw(image)
-        font = ImageFont.truetype(FONT_PATH, 36)
-        text_bbox = draw.textbbox((0, 0), watermark_text, font=font)
-        text_width = text_bbox[2] - text_bbox[0]
-        text_height = text_bbox[3] - text_bbox[1]
-        x = (width - text_width) / 2
-        y = (height - text_height) / 2
-        draw.text((x, y), watermark_text, font=font, fill=(100, 100, 100, 128))
-        image = image.rotate(45, expand=1)
-        image.save(TMP_WATERMARK_PATH, format="PNG")
+    watermark_text = input(
+        f"{Fore.MAGENTA}- Entrez un texte pour le filigrane (défaut = 'Watermarked') : {Style.RESET_ALL}"
+    ).strip() or "Watermarked"
 
-        # Appliquer le filigrane au PDF
-        reader = PdfReader(TMP_PDF_PATH2)
+    # ---------- Préparation de la police ----------
+    font = None
+    font_path = FONT_PATH or os.environ.get("SIYUPDF_ARIAL_PATH", "")
+    try:
+        if font_path:
+            font = ImageFont.truetype(font_path, 36)
+    except Exception as e:
+        print(Fore.YELLOW + f"⚠️ Impossible de charger la police '{font_path}' ({e}). Fallback sur la police par défaut." + Style.RESET_ALL)
+    if font is None:
+        font = ImageFont.load_default()
+
+    # ---------- Création de l'image watermark ----------
+    width, height = 500, 500
+    image = Image.new("RGBA", (width, height), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(image)
+    # bbox du texte
+    text_bbox = draw.textbbox((0, 0), watermark_text, font=font)
+    text_width = text_bbox[2] - text_bbox[0]
+    text_height = text_bbox[3] - text_bbox[1]
+    x = (width - text_width) / 2
+    y = (height - text_height) / 2
+    draw.text((x, y), watermark_text, font=font, fill=(100, 100, 100, 128))
+    image = image.rotate(45, expand=1)
+    image.save(TMP_WATERMARK_PATH, format="PNG")
+
+    # ---------- Sélection du fichier source ----------
+    reader_path = TMP_PDF_PATH2 if os.path.exists(TMP_PDF_PATH2) else TMP_PDF_PATH1
+    if not os.path.exists(reader_path):
+        print(Fore.RED + f"❌ Fichier source introuvable : {reader_path}" + Style.RESET_ALL)
+        return
+
+    # ---------- Application du filigrane page par page ----------
+    try:
+        reader = PdfReader(reader_path)
         writer = PdfWriter()
-        with BytesIO() as packet:
-            c = canvas.Canvas(packet, pagesize=letter)
-            c.drawImage(TMP_WATERMARK_PATH, 0, 0, width=letter[0], height=letter[1], mask="auto")
+
+        for page in reader.pages:
+            # Dimensions réelles de la page
+            media_box = page.mediabox
+            page_w = float(media_box.width)
+            page_h = float(media_box.height)
+
+            # Créer un overlay PDF en mémoire aux bonnes dimensions
+            packet = BytesIO()
+            c = canvas.Canvas(packet, pagesize=(page_w, page_h))
+            # Dessine l'image watermark en plein écran
+            # (mask="auto" pour transparence PNG)
+            c.drawImage(TMP_WATERMARK_PATH, 0, 0, width=page_w, height=page_h, mask="auto")
             c.save()
             packet.seek(0)
+
             overlay_page = PdfReader(packet).pages[0]
-            for page in reader.pages:
-                page.merge_page(overlay_page)
-                writer.add_page(page)
-        # Sauvegarder les changements dans TMP_PDF_PATH
+            # Fusionne l'overlay avec la page
+            page.merge_page(overlay_page)
+            writer.add_page(page)
+
+        # Écrit le résultat dans TMP_PDF_PATH2 (fichier de travail suivant)
         with open(TMP_PDF_PATH2, "wb") as output_pdf:
             writer.write(output_pdf)
-        animated_status("Traitement en cours")
-    else:
-        print(f"{Fore.LIGHTBLACK_EX}Création de filigrane (SKIP).")
 
+        animated_status("Traitement en cours")
+    except Exception as e:
+        print(Fore.RED + f"❌ Échec lors de l'application du filigrane : {e}" + Style.RESET_ALL)
+        
 
 def add_footer():
     """
